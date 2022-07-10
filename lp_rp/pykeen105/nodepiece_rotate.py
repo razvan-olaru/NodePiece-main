@@ -1,12 +1,10 @@
-import os
-os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
 import torch
 import random
 import numpy as np
 from torch.nn import functional
 from torch.nn import TransformerEncoder, TransformerEncoderLayer
-from typing import Optional, Dict, List
-from collections import Counter, defaultdict
+from typing import Optional, List
+from collections import defaultdict
 
 from torch import nn
 from pykeen.losses import Loss
@@ -14,50 +12,8 @@ from pykeen.triples import TriplesFactory
 from pykeen.models import Model
 from tqdm import tqdm
 from nodepiece_tokenizer import NodePiece_Tokenizer
+from pykeen105.variable_sized_embedding import VariableSizedEmbedding
 
-
-class MLP(nn.Module):
-    """
-    This class implements an MLP in Pytorch.
-    It handles the different layers and parameters of the model.
-    """
-    
-    def __init__(self, n_input, n_hidden, n_classes):
-        """
-        
-        Args:
-          n_input: number of input dimensions
-          n_hidden: number of hidden dimensions
-          n_classes: number of output dimensions
-          
-        """        
-
-        super().__init__()
-        
-        self.n_input = n_input
-        self.n_hidden = n_hidden
-        self.n_classes = n_classes
-        
-        self.mlp = nn.Sequential(
-            nn.Linear(self.n_input, self.n_hidden),
-            nn.ReLU(),
-            nn.Linear(self.n_hidden, self.n_classes)
-        )
-    
-    def forward(self, x):
-        """
-        Performs forward pass of the input.
-        
-        Args:
-          x: input to the network
-        Returns:
-          out: outputs of the network
-
-        """
-
-        out = self.mlp(x)
-        
-        return out
 
 class NodePieceRotate(Model):
 
@@ -82,8 +38,7 @@ class NodePieceRotate(Model):
                  sample_rels: int = 0,  # size of the relational context
                  ablate_anchors: bool = False,  # for ablations - node hashes will be constructed only from the relational context
                  tkn_mode: str = "path",  # default NodePiece vocabularization strategy
-                 clustered_anchors: List = None, 
-                 reduced_length: int = None,
+                 anchors_reduced_embeddings: List = None, # reduced embeddings
                  ):
 
         super().__init__(
@@ -100,13 +55,10 @@ class NodePieceRotate(Model):
         self.sample_rels = sample_rels
         self.ablate_anchors = ablate_anchors
         self.tkn_mode = tkn_mode
+        self.anchors_reduced_embeddings = anchors_reduced_embeddings
 
         # cat pooler - concat all anchors+relations in one big vector, pass through a 2-layer MLP
         if pooler == "cat":
-            # print(embedding_dim)
-            # print(max_paths)
-            # print(sample_rels)
-            # print(embedding_dim * (max_paths + sample_rels))
             self.set_enc = nn.Sequential(
                 nn.Linear(embedding_dim * (max_paths + sample_rels), embedding_dim * 2), nn.Dropout(drop_prob), nn.ReLU(),
                 nn.Linear(embedding_dim * 2, embedding_dim)
@@ -116,8 +68,6 @@ class NodePieceRotate(Model):
             )
         # trf pooler - vanilla transformer encoder with mean pooling on top
         elif pooler == "trf":
-            ###### Transformer Encoder
-
             encoder_layer = TransformerEncoderLayer(
                 d_model=embedding_dim,
                 nhead=num_heads,
@@ -125,14 +75,6 @@ class NodePieceRotate(Model):
                 dropout=drop_prob,
             )
             self.set_enc = TransformerEncoder(encoder_layer=encoder_layer, num_layers=num_layers)
-
-            self.mlp = nn.Sequential(
-                nn.Linear(reduced_length, 64),
-                nn.ReLU(),
-                nn.Linear(64, embedding_dim)
-            )
-
-
 
         self.device = device
         self.loss = loss
@@ -152,24 +94,10 @@ class NodePieceRotate(Model):
         self.automatic_memory_optimization = False
         self.tokenizer.token2id[self.tokenizer.NOTHING_TOKEN] = len(tokenizer.token2id) - 1  # TODO this is a bugfix as PathTrfEncoder puts its own index here
 
+        ###### 
+        self.anchor_embeddings = VariableSizedEmbedding(embedding_sizes=self.anchors_reduced_embeddings, embedding_dimension=self.embedding_dim, hid_dim=hid_dim)
+        print("Embedding Model: ", self.anchor_embeddings)
 
-        self.clustered_anchors = clustered_anchors
-        self.reduced_length = reduced_length
-        # self.mlp = MLP(self.reduced_length, 64, self.embedding_dim)
-
-        print("NN EMBEDDINGS DIMENSIONS: ", len(tokenizer.token2id), embedding_dim)
-        print("New Shape: ", len(self.clustered_anchors), self.reduced_length)
-        print("Padding token: ", tokenizer.PADDING_TOKEN, self.tokenizer.token2id, self.tokenizer.token2id[tokenizer.PADDING_TOKEN])
-
-        # if self.tokenizer.PADDING_TOKEN in self.clustered_anchors:
-        #     self.anchor_embeddings = nn.Embedding(len(self.clustered_anchors), embedding_dim=self.reduced_length, padding_idx=self.clustered_anchors[self.tokenizer.PADDING_TOKEN])
-        # else:
-        #     self.anchor_embeddings = nn.Embedding(len(self.clustered_anchors), embedding_dim=self.reduced_length)
-        
-        self.anchor_embeddings = nn.Embedding(len(tokenizer.token2id), embedding_dim=reduced_length, padding_idx=self.tokenizer.token2id[tokenizer.PADDING_TOKEN])
-
-        # self.anchor_embeddings = nn.Embedding(len(tokenizer.token2id), embedding_dim=embedding_dim, padding_idx=self.tokenizer.token2id[tokenizer.PADDING_TOKEN])
-        
         self.relation_embeddings = nn.Embedding(self.triples_factory.num_relations + 1, embedding_dim=embedding_dim, padding_idx=self.triples_factory.num_relations)
         self.dist_emb = nn.Embedding(self.max_seq_len, embedding_dim=embedding_dim)
         self.entity_embeddings = None
@@ -230,7 +158,10 @@ class NodePieceRotate(Model):
             # RANDOM strategy
             # in this case, we bypass distances and won't use relations in the encoder
             print("NN EMBEDDINGS 2: ", self.random_hashes, embedding_dim)
-            self.anchor_embeddings = nn.Embedding(self.random_hashes, embedding_dim=embedding_dim)
+
+            ######
+            self.anchor_embeddings = VariableSizedEmbedding(embedding_sizes=self.anchors_reduced_embeddings, embedding_dimension=self.embedding_dim)
+            # self.anchor_embeddings = nn.Embedding(self.random_hashes, embedding_dim=embedding_dim)
             hashes = [
                 random.sample(list(range(random_hashes)), self.sample_paths)
                 for i in range(triples.num_entities)
@@ -272,28 +203,14 @@ class NodePieceRotate(Model):
                         module.reset_parameters()
 
 
-        torch.nn.init.xavier_uniform_(self.anchor_embeddings.weight)
+        self.anchor_embeddings.reset_parameters()
         torch.nn.init.xavier_uniform_(self.dist_emb.weight)
-
-
-        # if self.random_hashes == 0:
-        #     with torch.no_grad():
-        #         if self.tokenizer.PADDING_TOKEN in self.clustered_anchors:
-        #             self.anchor_embeddings.weight[self.clustered_anchors[self.tokenizer.PADDING_TOKEN]] = torch.zeros(self.reduced_length)
-        #         self.dist_emb.weight[0] = torch.zeros(self.embedding_dim)
 
         if self.random_hashes == 0:
             with torch.no_grad():
                 print("Random Hashes")
-                self.anchor_embeddings.weight[self.tokenizer.token2id[self.tokenizer.PADDING_TOKEN]] = torch.zeros(self.reduced_length)
+                # self.anchor_embeddings.weight[self.tokenizer.token2id[self.tokenizer.PADDING_TOKEN]] = torch.zeros(self.reduced_length)
                 self.dist_emb.weight[0] = torch.zeros(self.embedding_dim)
-
-        # if self.random_hashes == 0:
-        #     with torch.no_grad():
-        #         print("Random Hashes")
-        #         self.anchor_embeddings.weight[self.tokenizer.token2id[self.tokenizer.PADDING_TOKEN]] = torch.zeros(self.embedding_dim)
-        #         self.dist_emb.weight[0] = torch.zeros(self.embedding_dim)
-
 
         # for RotatE: phases randomly between 0 and 2 pi
         phases = 2 * np.pi * torch.rand(self.num_relations, self.real_embedding_dim, device=self.device)
@@ -325,7 +242,7 @@ class NodePieceRotate(Model):
         if self.pooler == "cat":
             anc_embs = anc_embs.view(anc_embs.shape[0], -1)
             pooled = self.set_enc(anc_embs) if self.sample_paths != 1 else anc_embs
-        elif self.pooler == "trf":         ###HERE
+        elif self.pooler == "trf":
             pooled = self.set_enc(anc_embs.transpose(1, 0))  # output shape: (seq_len, bs, dim)
             pooled = pooled.mean(dim=0)  # output shape: (bs, dim)
 
@@ -336,25 +253,10 @@ class NodePieceRotate(Model):
 
         # take a node index and find its NodePiece hash
 
-        # print("Entities: ", entities)
         hashes, dists, ids = self.hashes[entities], self.distances[entities], self.total_paths[entities]
 
-        print("Input Embedding Layer: ", hashes.shape)
-        print("Embedding Layer: ", self.anchor_embeddings)
+        ########
         anc_embs = self.anchor_embeddings(hashes)
-        print("Output Embedding Layer: ", anc_embs.shape)
-
-        # print("MLP Layer: ", self.mlp)
-
-        # batch = torch.tensor(np.random.rand(10, 40), dtype=torch.float, device=self.device)
-        # self.batch = torch.rand((10, 40), device=self.device)
-
-        # self.hashes = torch.tensor((10, 40), dtype=torch.long, device=self.device)
-        # print("Self Hashes: ", self.hashes)
-
-        anc_embs = self.mlp(anc_embs)
-        print("Output MLP Layer: ", anc_embs.shape, '\n')
-
 
         mask = None
 
@@ -454,10 +356,6 @@ class NodePieceRotate(Model):
             r = self.relation_embeddings(hrt_batch[:, 1]).view(-1, self.real_embedding_dim, 2)
             t = self.encode_by_index(hrt_batch[:, 2]).view(-1, self.real_embedding_dim, 2)
 
-            # h = self.encode_by_index(hrt_batch[:, 0]).view(-1, self.reduced_length//2, 2)
-            # r = self.relation_embeddings(hrt_batch[:, 1]).view(-1, self.reduced_length//2, 2)
-            # t = self.encode_by_index(hrt_batch[:, 2]).view(-1, self.reduced_length//2, 2)
-
             # Compute scores
             scores = self.interaction_function(h=h, r=r, t=t).view(-1, 1)
         else:
@@ -470,7 +368,6 @@ class NodePieceRotate(Model):
                 # Compute scores
                 scores[i: i+self.subbatch] = self.interaction_function(h=h, r=r, t=t).view(-1, 1)
 
-        print("SCORES? : ", scores.shape)
         return scores
 
 

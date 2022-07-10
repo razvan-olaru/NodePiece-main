@@ -15,7 +15,7 @@ from datasets.codex import CoDExLarge
 from nodepiece_tokenizer import NodePiece_Tokenizer
 
 from pykeen105.relation_rank_evaluator import RelationPredictionRankBasedEvaluator
-from pykeen105.negative_sampler import FilteredNegativeSampler, RelationalNegativeSampler
+from pykeen105.negative_sampler import RelationalNegativeSampler
 
 import torch
 import click
@@ -26,9 +26,6 @@ import pickle
 
 from networkx import degree_centrality
 from sklearn.cluster import KMeans
-from collections import Counter
-import matplotlib.pyplot as plt
-from pykeen105.mlp import MLP
 import sys
 sys.path.insert(0, 'C:/Users/razva/Desktop/NodePiece-main/nc/')
 
@@ -236,7 +233,6 @@ def main(
                                        dataset_name=dataset_name)
         loop_type = FilteredSLCWATrainingLoop
     else:
-        #### ENTERS HERE
         negative_sampler_cls = BasicNegativeSampler
         negative_sampler_kwargs = dict(num_negs_per_pos=num_negatives_ent)
         loop_type = SLCWATrainingLoop
@@ -255,7 +251,7 @@ def main(
                                 num_anchors=topk_anchors, dataset_name=dataset_name, limit_shortest=k_shortest_paths,
                                 add_identity=anchor_eye, mode=tkn_mode, limit_random=k_random_paths)
 
-    ########################################### START: OUR CODE
+    ################################################################## START
     project = True
 
     if project == True:
@@ -264,26 +260,11 @@ def main(
         with open('data/wn18rr_30_anchors_30_paths_d0.4_b0.0_p0.4_r0.2_pykeen_20sp.pkl', 'rb') as f:
             data = pickle.load(f)
 
-        top_entities, non_core_entities, vocab, graph = data
-
-        # vocab is fixed  wrt data:  40559, you set no of anchors and the rest is non-anchors
-        print(len(top_entities))   # 34 anchors = 30 + 4 negative numbers?
-        print(len(non_core_entities))  # 40 529 non-anchors
-        print(len(vocab))              # 40 559 = 40 529 + 30 vocab
-        
-        print("Anchors: ", top_entities, '\n')
-        print("Non Anchors: ", len(vocab))
-        print("Non Anchors: ", vocab[0])
-        print("graph: ", type(graph))
-
-
+        top_entities, _, _, graph = data
 
         # Step 1: Degree Centrality
         G = graph.to_networkx()
-        print("graph: ", G)
         G_degree_centrality = degree_centrality(G)
-        print("degree centraility: ", np.array(list(G_degree_centrality.values())).reshape(-1, 1))  #type: dict
-
 
         # Step 1.2: Clustering
         degree_values = np.array(list(G_degree_centrality.values())).reshape(-1, 1)
@@ -298,91 +279,34 @@ def main(
         best_k = [i+1 for i,v in enumerate(sse_diff) if v < 0.0005][0]
         print("Best k: ", best_k)
 
-        plt.figure()
-        plt.plot(list(range(1, len(sse)+1)), sse)
-        plt.xlabel("Number of cluster")
-        plt.ylabel("SSE")
-        plt.show()
+        # Elbow Rule Plot:
+        # plt.figure()
+        # plt.plot(list(range(1, len(sse)+1)), sse)
+        # plt.xlabel("Number of cluster")
+        # plt.ylabel("SSE")
+        # plt.show()
 
         # Apply kmeans with best k
         kmeans = KMeans(n_clusters=best_k).fit(degree_values)
-        # print("labels: ", kmeans.labels_)
-        print("labels: ", Counter(list(kmeans.labels_)))
 
-        print("Anchors: ", top_entities)
-        print("Anchors clusters: ", list(kmeans.labels_[top_entities]))
-
+        # Creates a dict: "anchor_id" : [anchor's cluster id, number of anchors in that cluster]
         anchors_clusters = {}
         for i in range(len(top_entities)):
             current_cluster = kmeans.labels_[top_entities][i]
-            anchors_clusters[top_entities[i]] = [current_cluster, list(kmeans.labels_[top_entities]).count(current_cluster)]  # dict: "anchor_id" : [anchor's cluster, number of anchors in that cluster]
-        print("Anchors clusters: ", anchors_clusters)
+            anchors_clusters[top_entities[i]] = [current_cluster, list(kmeans.labels_[top_entities]).count(current_cluster)]
 
-
-
-
-        # Step 2: Get Embedding length normalized by number of anchors in its clsuter
-        
-        # embedding_representations = ft_loop.model.get_all_representations()
-        # print("EMBEDDINGS: ", embedding_representations.shape)          # Shape = (40559, 200)
-        
-
+        # Step 2: Get the new reduced embedding length
         anchors_reduced_length= {}
         for i in range(len(top_entities)):
             anchors_reduced_length[top_entities[i]] = int(embedding_dimension / anchors_clusters[top_entities[i]][1])
-        print("Reduced length of anchors: ", anchors_reduced_length)
-        print(list(anchors_reduced_length.values()))
 
+        anchors_reduced_length_sorted = sorted(anchors_reduced_length.items())
+        anchors_reduced_embeddings = torch.Tensor([x[1] for x in anchors_reduced_length_sorted])
 
-        # # Step 3: Concat embeddings with the same reduced dimension:
-        config = DEFAULT_CONFIG.copy()
+    ################################################################## END
 
-        anchors_with_same_length = []
-        for reduced_length in list(set(anchors_reduced_length.values())):
-            anchors_with_same_length.append([k for k, v in anchors_reduced_length.items() if v == reduced_length])
-        print("Anchors with the same reduced length: ", anchors_with_same_length)
-            # grouped_anchors_per_reduced_length = embedding_representations[anchors_with_same_length]
-            # print(grouped_anchors_per_reduced_length)
-
-
-
-        ########################################### START: OUR CODE
         device = resolve_device()
-        # device = 'cpu'
-
-        # # batch2 = torch.tensor(np.random.rand(24, 128, 200), dtype=torch.float).to(self.device)
-        # # print("THAS: ", self.model.set_enc(batch2), '\n')
-
-        # for anchor_cluster in anchors_with_same_length:
-
-        #     no_anchors = len(anchor_cluster)
-        #     reduced_length = anchors_reduced_length[anchor_cluster[0]]
-        #     print("NO ANCHORS AND REDUCED LNEGTH: ", no_anchors, reduced_length)
-
-        #     ### ex shape: (5, 128, 40) or (19, 128, 10)
-        #     input = torch.rand((no_anchors, 128, reduced_length), dtype=torch.float).to(device)
-
-        #     mlp = MLP(reduced_length, 256, 200).to(device)
-
-        #     optimizer = torch.optim.Adam(mlp.parameters(), lr=0.01)
-
-        #     mlp.train()
-        #     mlp.zero_grad()
-
-        #     out = mlp.forward(input)
-
-        #     out2 = ft_loop.model.set_enc(out)
-        #     print("OUT: ", out2, out2.shape, '\n')
-        #     # loss = torch.sqrt(criterion(out, Y[i]))
-        #     # loss.backward()
-        #     # optimizer.step()
-        #     # print("LOSS: ", loss)
-
-
-
-        ########################################### FINISH: OUR CODE
-        ########################################### START: THEIR CODE
-        # device = resolve_device()
+    
 
         # cater for corner cases when user-input max seq len is incorrect
         if max_seq_len == 0 or max_seq_len != (kg_tokenizer.max_seq_len+3):
@@ -413,24 +337,6 @@ def main(
             ft_loop = SLCWATrainingLoop(model=finetuning_model, optimizer=optimizer)
 
         else:
-            ############### IT ENTERS HERE
-            print("embedding_dimension: ", embedding_dimension) 
-            print("train_factory: ", train_factory)
-            print("max_paths: ", ft_max_paths)
-            print("subbatch: ", trf_subbatch)
-            print("max_seq_len: ", max_seq_len)
-            print("hid_dim: ", transformer_hidden_dim)
-            print("num_heads: ", transformer_num_heads)
-            print("use_distances: ", use_anchor_distances)
-            print("num_layers: ", transformer_layers)
-            print("nearest: ", nearest_neighbors)
-            print("sample_rels: ", sample_rels)
-            print("ablate_anchors: ", ablate_anchors)
-            print("tkn_mode: ", tkn_mode, '\n')
-
-            # Just for the first reduced length (5, 40)
-            clustered_anchors = anchors_with_same_length[0]
-            reduced_length = anchors_reduced_length[anchors_with_same_length[0][0]]
     
             finetuning_model = NodePieceRotate(embedding_dim=embedding_dimension, device=device, loss=ft_loss,
                                             triples=train_factory, max_paths=ft_max_paths, subbatch=trf_subbatch,
@@ -439,19 +345,16 @@ def main(
                                             use_distances=use_anchor_distances, num_layers=transformer_layers, drop_prob=transformer_dropout,
                                             rel_policy=rel_policy, random_hashes=random_hashing, nearest=nearest_neighbors,
                                             sample_rels=sample_rels, ablate_anchors=ablate_anchors, tkn_mode=tkn_mode,
-                                            clustered_anchors=clustered_anchors, reduced_length=reduced_length)
+                                            anchors_reduced_embeddings = anchors_reduced_embeddings)
 
             optimizer = Adam(params=finetuning_model.parameters(), lr=learning_rate)
             print(f"Number of params: {sum(p.numel() for p in finetuning_model.parameters())}")
-            # print("FINETUNED MODEL: ", finetuning_model)
             if loop == "slcwa":
-                ################# IT ENTERS HERE
                 ft_loop = loop_type(model=finetuning_model, optimizer=optimizer, negative_sampler_cls=negative_sampler_cls,
                                             negative_sampler_kwargs=negative_sampler_kwargs)
             else:
                 ft_loop = LCWATrainingLoop(model=finetuning_model, optimizer=optimizer)
 
-        print("MODEL : ", ft_loop.model)
         # add the results tracker if requested
         if enable_wandb:
             project_name = "NodePiece_LP"
@@ -483,54 +386,9 @@ def main(
             ft_loop.train(num_epochs=num_epochs, batch_size=batch_size, result_tracker=tracker,
                         stopper=early_stopper, label_smoothing=lbl_smoothing)
         else:
-            #### IT ENTERS HERE
             ft_loop.train(num_epochs=num_epochs, batch_size=batch_size, result_tracker=tracker,
                         stopper=early_stopper)
 
-
-        ########################################### FINISH: THEIR CODE
-        # ########################################### START: OUR CODE
-
-        # # batch2 = torch.tensor(np.random.rand(24, 128, 200), dtype=torch.float).to(self.device)
-        # # print("THAS: ", self.model.set_enc(batch2), '\n')
-
-        # for anchor_cluster in anchors_with_same_length:
-
-        #     no_anchors = len(anchor_cluster)
-        #     reduced_length = anchors_reduced_length[anchor_cluster[0]]
-        #     print("NO ANCHORS AND REDUCED LNEGTH: ", no_anchors, reduced_length)
-
-        #     ### ex shape: (5, 128, 40) or (19, 128, 10)
-        #     input = torch.rand((no_anchors, 128, reduced_length), dtype=torch.float).to(device)
-
-        #     mlp = MLP(reduced_length, 256, 200).to(device)
-
-        #     optimizer = torch.optim.Adam(mlp.parameters(), lr=0.01)
-
-        #     mlp.train()
-        #     mlp.zero_grad()
-
-        #     out = mlp.forward(input)
-
-        #     out2 = ft_loop.model.set_enc(out)
-        #     print("OUT: ", out2, out2.shape, '\n')
-
-
-        #     # ft_loss.process_slcwa_scores(positive_scores = positive_scores,
-        #     # negative_scores = negative_scores,
-        #     # label_smoothing = label_smoothing,
-        #     # batch_filter = positive_filter)
-        #     # loss = torch.sqrt(criterion(out, Y[i]))
-        #     # loss.backward()
-        #     # optimizer.step()
-        #     # print("LOSS: ", loss)
-
-
-
-
-
-        # ########################################### FINISH: OUR CODE
-        ########################################### START: THEIR CODE
         # run the final test eval
         test_evaluator = evaluator_type()
         test_evaluator.batch_size = 256
@@ -554,8 +412,6 @@ def main(
 
         print("Test results")
         print(metric_results)
-
-        ########################################### FINISH: THEIR CODE
 
     else:
         return 0
