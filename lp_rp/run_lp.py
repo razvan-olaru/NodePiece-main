@@ -299,7 +299,7 @@ def main(
         anchors_reduced_length= {}
         for i in range(len(top_entities)):
             anchors_reduced_length[top_entities[i]] = int(embedding_dimension / anchors_clusters[top_entities[i]][1])
-
+        
         anchors_reduced_length_sorted = sorted(anchors_reduced_length.items())
         anchors_reduced_embeddings = torch.Tensor([x[1] for x in anchors_reduced_length_sorted])
 

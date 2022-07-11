@@ -95,10 +95,10 @@ class NodePieceRotate(Model):
         self.tokenizer.token2id[self.tokenizer.NOTHING_TOKEN] = len(tokenizer.token2id) - 1  # TODO this is a bugfix as PathTrfEncoder puts its own index here
 
         ###### 
-        self.anchor_embeddings = VariableSizedEmbedding(embedding_sizes=self.anchors_reduced_embeddings, embedding_dimension=self.embedding_dim, hid_dim=hid_dim)
-        print("Embedding Model: ", self.anchor_embeddings)
+        self.anchor_embeddings = VariableSizedEmbedding(embedding_sizes=self.anchors_reduced_embeddings, embedding_dimension=self.embedding_dim, hid_dim=hid_dim, device=self.device)
+        # print("Embedding Model: ", self.anchor_embeddings)
 
-        self.relation_embeddings = nn.Embedding(self.triples_factory.num_relations + 1, embedding_dim=embedding_dim, padding_idx=self.triples_factory.num_relations)
+        self.relation_embeddings = nn.Embedding(self.triples_factory.num_relations + 1, embedding_dim=embedding_dim, padding_idx=self.triples_factory.num_relations, device=self.device)
         self.dist_emb = nn.Embedding(self.max_seq_len, embedding_dim=embedding_dim)
         self.entity_embeddings = None
 
@@ -157,7 +157,7 @@ class NodePieceRotate(Model):
         else:
             # RANDOM strategy
             # in this case, we bypass distances and won't use relations in the encoder
-            print("NN EMBEDDINGS 2: ", self.random_hashes, embedding_dim)
+            # print("NN EMBEDDINGS 2: ", self.random_hashes, embedding_dim)
 
             ######
             self.anchor_embeddings = VariableSizedEmbedding(embedding_sizes=self.anchors_reduced_embeddings, embedding_dimension=self.embedding_dim)
@@ -275,7 +275,7 @@ class NodePieceRotate(Model):
             anc_embs = torch.cat([anc_embs, rels], dim=1)  # (bs, ancs+rel_sample_size, dim)
 
         anc_embs = self.pool_anchors(anc_embs, mask=mask)  # (bs, dim)
-        print("ANOTHER ANC EMBS: ", anc_embs.shape)
+        # print("ANOTHER ANC EMBS: ", anc_embs.shape)
 
         return anc_embs
 
@@ -291,7 +291,7 @@ class NodePieceRotate(Model):
             entities = torch.tensor(vocab_keys[i: i+self.subbatch], dtype=torch.long, device=self.device)
             embs = self.encode_by_index(entities)
             temp_embs[i: i + self.subbatch, :] = embs
-        print("TEMP EMBS: ", temp_embs.shape, '\n')
+        # print("TEMP EMBS: ", temp_embs.shape, '\n')
         return temp_embs
 
 
@@ -351,7 +351,7 @@ class NodePieceRotate(Model):
         # when training with large # of neg samples the hrt_batch size can be too big to fit into memory, so chunk it
         if hrt_batch.shape[0] <= self.subbatch or self.subbatch == 0:
             # Get embeddings
-            print("hrt_batch: ", hrt_batch[:, 0].shape)
+            # print("hrt_batch: ", hrt_batch[:, 0].shape)
             h = self.encode_by_index(hrt_batch[:, 0]).view(-1, self.real_embedding_dim, 2)
             r = self.relation_embeddings(hrt_batch[:, 1]).view(-1, self.real_embedding_dim, 2)
             t = self.encode_by_index(hrt_batch[:, 2]).view(-1, self.real_embedding_dim, 2)
