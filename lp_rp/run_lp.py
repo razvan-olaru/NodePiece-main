@@ -28,7 +28,6 @@ import pickle
 from networkx import degree_centrality
 from sklearn.cluster import KMeans
 import sys
-sys.path.insert(0, 'C:/Users/razva/Desktop/NodePiece-main/nc/')
 from collections import Counter
 import math
 
