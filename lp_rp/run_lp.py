@@ -1,3 +1,4 @@
+from re import I
 from pykeen.datasets import FB15k237, WN18RR, YAGO310
 from pykeen.utils import resolve_device
 from pykeen.losses import BCEWithLogitsLoss, SoftplusLoss, MarginRankingLoss, NSSALoss
@@ -28,7 +29,8 @@ from networkx import degree_centrality
 from sklearn.cluster import KMeans
 import sys
 sys.path.insert(0, 'C:/Users/razva/Desktop/NodePiece-main/nc/')
-
+from collections import Counter
+import math
 
 torch.manual_seed(42)
 np.random.seed(42)
@@ -256,8 +258,17 @@ def main(
 
     if project == True:
 
-        # Step 0: Get Graph
-        with open('data/wn18rr_30_anchors_30_paths_d0.4_b0.0_p0.4_r0.2_pykeen_20sp.pkl', 'rb') as f:
+        # Step 0: Recreate Filename and Get Graph
+        strategy_encoding = f"d{strategy_degree}_b{strategy_betweenness}_p{strategy_pagerank}_r{strategy_random}"
+        filename = f"data/{dataset_name}_{topk_anchors}_anchors_{topk_anchors}_paths_{strategy_encoding}_pykeen"
+        if k_shortest_paths > 0:
+            filename += f"_{k_shortest_paths}sp"  
+        if k_random_paths > 0:
+            filename += f"_{k_random_paths}rand"
+        if tkn_mode == "bfs":
+            filename += "_bfs"
+        filename += ".pkl"
+        with open(filename, 'rb') as f:
             data = pickle.load(f)
 
         top_entities, _, _, graph = data
@@ -271,43 +282,30 @@ def main(
 
         # Apply Elbow rule to find optimal k
         sse = []
-        for k in range(1, 10):
+        for k in range(1, 50):
             kmeans = KMeans(n_clusters=k).fit(degree_values)
             sse.append(kmeans.inertia_) # Inertia: Sum of distances of samples to their closest cluster center
         
         sse_diff = [sse[i] - sse[i+1] for i in range(len(sse)-1)]
         best_k = [i+1 for i,v in enumerate(sse_diff) if v < 0.0005][0]
-        print("Best k: ", best_k)
-
-        # Elbow Rule Plot:
-        # plt.figure()
-        # plt.plot(list(range(1, len(sse)+1)), sse)
-        # plt.xlabel("Number of cluster")
-        # plt.ylabel("SSE")
-        # plt.show()
-
-        # Apply kmeans with best k
+      
         kmeans = KMeans(n_clusters=best_k).fit(degree_values)
-
-        # Creates a dict: "anchor_id" : [anchor's cluster id, number of anchors in that cluster]
+    
         anchors_clusters = {}
         for i in range(len(top_entities)):
             current_cluster = kmeans.labels_[top_entities][i]
             anchors_clusters[top_entities[i]] = [current_cluster, list(kmeans.labels_[top_entities]).count(current_cluster)]
 
-        # Step 2: Get the new reduced embedding length
         anchors_reduced_length= {}
         for i in range(len(top_entities)):
-            anchors_reduced_length[top_entities[i]] = int(embedding_dimension / anchors_clusters[top_entities[i]][1])
-        
+            anchors_reduced_length[top_entities[i]] = int(math.ceil(embedding_dimension / anchors_clusters[top_entities[i]][1]))
+           
         anchors_reduced_length_sorted = sorted(anchors_reduced_length.items())
         anchors_reduced_embeddings = torch.Tensor([x[1] for x in anchors_reduced_length_sorted])
 
     ################################################################## END
-
         device = resolve_device()
-    
-
+        
         # cater for corner cases when user-input max seq len is incorrect
         if max_seq_len == 0 or max_seq_len != (kg_tokenizer.max_seq_len+3):
             max_seq_len = kg_tokenizer.max_seq_len + 3  # as in the PathTrfEncoder, +1 CLS, +1 PAD, +1 LP tasks

@@ -62,7 +62,6 @@ class NodePiece_Tokenizer:
 
         # numerical indices for entities and relations
         self.token2id = {t: i for i, t in enumerate(self.top_entities)}
-        print("TOKEN2ID: ", len(self.token2id), '\n')
         self.rel2token = {t: i + len(self.top_entities) for i, t in
                           enumerate(list(self.triples_factory.relation_to_id.values()))}
         self.vocab_size = len(self.token2id) + len(self.rel2token)
@@ -110,7 +109,6 @@ class NodePiece_Tokenizer:
         # create an input object for iGraph - edge list with relation types, and then create a graph
         edgelist = [[s, t] for s, t, r in zip(src, tgt, rels)]
         graph = Graph(n=self.triples_factory.num_entities, edges=edgelist, edge_attrs={'relation': list(rels)}, directed=True)
-        # print("This is the graph: ", graph)
 
         # sampling anchor nodes
         anchors = []
